@@ -1,0 +1,283 @@
+# =============================================================================
+# OnlineWhiteboard.org — Apache .htaccess
+# =============================================================================
+# Rules order:
+#   1. Engine ON
+#   2. HTTPS + canonical domain redirects (301)
+#   3. Security headers
+#   4. Protect sensitive files (JS source, config, dotfiles)
+#   5. Serve /5/script.js with correct MIME + cache
+#      -> 5b has 3 switchable modes for assets/script.js delivery
+#         (see the "SCRIPT DELIVERY MODE" block below for full details)
+#           MODE A = safe fallback   (keep both script.js + script.js.gz)
+#           MODE B = gzip only       (keep only script.js.gz, delete script.js)
+#           MODE C = plain js only   (keep only script.js, no gzip at all)
+#         Active mode below: MODE B (only script.js.gz kept on server)
+#   6. Friendly URLs for existing directory-based pages
+#   7. Custom 404
+# =============================================================================
+
+Options -Indexes -MultiViews
+DirectoryIndex index.html
+
+# ---------------------------------------------------------------------------
+# 1. Rewrite engine
+# ---------------------------------------------------------------------------
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # -------------------------------------------------------------------------
+  # 2a. Redirect HTTP → HTTPS (any host)
+  # -------------------------------------------------------------------------
+  RewriteCond %{HTTPS} off
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+  # -------------------------------------------------------------------------
+  # 2b. Redirect www.onlinewhiteboard.org → onlinewhiteboard.org (HTTPS)
+  # -------------------------------------------------------------------------
+  RewriteCond %{HTTPS} on
+  RewriteCond %{HTTP_HOST} ^www\.onlinewhiteboard\.org$ [NC]
+  RewriteRule ^ https://onlinewhiteboard.org%{REQUEST_URI} [R=301,L]
+
+  # -------------------------------------------------------------------------
+  # 2c. Redirect any other non-canonical domain → onlinewhiteboard.org (HTTPS)
+  #     (catches http://onlinewhiteboard.org already handled above, but also
+  #      any old domain aliases that might be pointed at the same server)
+  # -------------------------------------------------------------------------
+  RewriteCond %{HTTPS} on
+  RewriteCond %{HTTP_HOST} !^onlinewhiteboard\.org$ [NC]
+  RewriteRule ^ https://onlinewhiteboard.org%{REQUEST_URI} [R=301,L]
+
+  # -------------------------------------------------------------------------
+  # 5. (removed) Old shortcut assumed a real /5/script.js file existed and
+  #    skipped rewriting. Only script.js.gz exists now, so this was causing
+  #    404s by preventing the MODE A gzip-rewrite rule below from ever
+  #    running for /5/script.js. Left in place, commented, for reference:
+  #
+  # RewriteCond %{REQUEST_URI} ^/5/script\.js$ [NC]
+  # RewriteRule ^ - [L]
+
+  # =========================================================================
+  # 5b. SCRIPT DELIVERY MODE — choose ONE of the three modes below (A, B,
+  #     or C) by commenting/uncommenting the RewriteCond/RewriteRule lines.
+  #     Only one mode's rewrite lines should be UNCOMMENTED at a time.
+  # =========================================================================
+
+  # -------------------------------------------------------------------------
+  # MODE A — "SAFE FALLBACK" (use when BOTH assets/script.js AND
+  #           assets/script.js.gz exist on the server)
+  #   - Serves script.js.gz only if the browser supports gzip AND the
+  #     .gz file exists on disk.
+  #   - Otherwise falls through to the normal script.js automatically.
+  #   - Safest option — never breaks for any client.
+  #   TO ACTIVATE: uncomment the 2 lines below (remove the leading "# ").
+  # -------------------------------------------------------------------------
+  # RewriteCond %{HTTP:Accept-Encoding} gzip
+  # RewriteCond %{REQUEST_FILENAME}.gz -f
+  # RewriteRule ^(.*)\.js$ $1.js.gz [L]
+
+  # -------------------------------------------------------------------------
+  # MODE B — "GZIP ONLY" (use when you DELETE assets/script.js and keep
+  #           ONLY assets/script.js.gz on the server)
+  #   - Always rewrites .js requests to .js.gz whenever the .gz file
+  #     exists — no Accept-Encoding check, because there is no plain
+  #     .js file left to fall back to.
+  #   - Slightly smaller/faster, but assumes every client can decode gzip
+  #     (true for virtually all real browsers; a rare non-browser client
+  #     without gzip support could fail).
+  #   ACTIVE (only script.js.gz is kept on the server).
+  # -------------------------------------------------------------------------
+  RewriteCond %{REQUEST_FILENAME}.gz -f
+  RewriteRule ^(.*)\.js$ $1.js.gz [L]
+
+  # -------------------------------------------------------------------------
+  # MODE C — "PLAIN .js ONLY" (use when you DELETE script.js.gz and only
+  #           keep assets/script.js — i.e. disable gzip delivery entirely)
+  #   - No rewrite needed at all — just leave BOTH Mode A and Mode B
+  #     blocks above commented out. Requests for script.js will serve
+  #     the real script.js file directly, as normal.
+  # -------------------------------------------------------------------------
+
+  # -------------------------------------------------------------------------
+  # 6. Pretty URLs — strip trailing slash for directory index pages
+  #    Apache serves directory/index.html automatically; this just ensures
+  #    requests without trailing slash also work cleanly.
+  # -------------------------------------------------------------------------
+  # If request is a directory, serve its index.html
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^(.+[^/])$ /$1/ [R=301,L]
+
+  # Serve index.html for directory paths (without needing the file suffix)
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{DOCUMENT_ROOT}%{REQUEST_URI}/index.html -f
+  RewriteRule ^(.*)$ /$1/index.html [L]
+
+  # pages/ — allow .html extension to be omitted, with or without trailing slash
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} ^/(.+?)/?$
+  RewriteCond %{DOCUMENT_ROOT}/pages/%1.html -f
+  RewriteRule ^ /pages/%1.html [L]
+
+  # Fallback — 404
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ /404.html [L]
+
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# 3. Security headers
+# ---------------------------------------------------------------------------
+<IfModule mod_headers.c>
+  # Prevent MIME-type sniffing
+  Header always set X-Content-Type-Options "nosniff"
+
+  # Clickjacking protection (allow same-origin iframes for /room/ embed)
+  Header always set X-Frame-Options "SAMEORIGIN"
+
+  # XSS filter for older browsers
+  Header always set X-XSS-Protection "1; mode=block"
+
+  # Referrer policy
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+  # Strip server signature from responses
+  Header unset Server
+  Header unset X-Powered-By
+
+  # HSTS — tell browsers to always use HTTPS (1 year, include subdomains)
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+  # Permissions policy — disable unused browser features
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+</IfModule>
+
+# ---------------------------------------------------------------------------
+# 4. Protect sensitive files — JS source, dotfiles, config, logs
+#    NOTE: Web crawlers (Googlebot, Bingbot, etc.) are NOT blocked here.
+#    Only direct HTTP access to these file types is restricted.
+# ---------------------------------------------------------------------------
+
+# Block direct access to .htaccess itself and other dot-files
+<FilesMatch "^\.">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order Allow,Deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# Protect source maps, config files, and log files
+<FilesMatch "\.(map|config|conf|log|env|bak|sql|sh|py|rb|json\.bak)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order Allow,Deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# Allow sitemap.xml (needed for crawlers)
+<Files "sitemap.xml">
+  <IfModule mod_authz_core.c>
+    Require all granted
+  </IfModule>
+</Files>
+
+# Allow robots.txt (needed for crawlers)
+<Files "robots.txt">
+  <IfModule mod_authz_core.c>
+    Require all granted
+  </IfModule>
+</Files>
+
+# ---------------------------------------------------------------------------
+# 5. MIME types and caching for /5/script.js and static assets
+# ---------------------------------------------------------------------------
+<IfModule mod_mime.c>
+  AddType application/javascript .js
+  AddType text/css .css
+  AddType image/webp .webp
+  AddType image/svg+xml .svg
+  AddType application/font-woff2 .woff2
+
+  # Pre-compressed JS: tell Apache these are gzip-encoded JavaScript,
+  # not generic .gz downloads, so browsers execute (not download) them.
+  AddEncoding gzip .gz
+  AddType application/javascript .js.gz
+</IfModule>
+
+# Ensure any *.js.gz we hand out advertises the right encoding/type and
+# doesn't get double-compressed again by mod_deflate.
+<IfModule mod_headers.c>
+  <FilesMatch "\.js\.gz$">
+    Header set Content-Encoding gzip
+    Header set Content-Type "application/javascript"
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_expires.c>
+  ExpiresActive On
+
+  # HTML — short cache (content changes)
+  ExpiresByType text/html                 "access plus 1 hour"
+
+  # Script — versioned path (/5/script.js) — cache aggressively
+  ExpiresByType application/javascript    "access plus 1 year"
+
+  # CSS
+  ExpiresByType text/css                  "access plus 1 year"
+
+  # Images
+  ExpiresByType image/webp                "access plus 6 months"
+  ExpiresByType image/png                 "access plus 6 months"
+  ExpiresByType image/jpeg                "access plus 6 months"
+  ExpiresByType image/svg+xml             "access plus 6 months"
+
+  # Fonts
+  ExpiresByType application/font-woff2   "access plus 1 year"
+
+  # Sitemap / robots — weekly refresh
+  ExpiresByType application/xml           "access plus 1 week"
+  ExpiresByType text/plain                "access plus 1 week"
+</IfModule>
+
+# Cache-Control header for /5/script.js(.gz) (immutable since path is versioned)
+<FilesMatch "^script17cc1781920121232425\.js(\.gz)?$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </IfModule>
+</FilesMatch>
+
+# ---------------------------------------------------------------------------
+# 7. Custom error pages
+# ---------------------------------------------------------------------------
+ErrorDocument 404 /404.html
+ErrorDocument 403 /404.html
+
+# ---------------------------------------------------------------------------
+# Compression — serve gzip where supported
+# ---------------------------------------------------------------------------
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript application/xml text/plain image/svg+xml
+</IfModule>
+
+# Never let mod_deflate try to gzip an already-gzipped file (double compression)
+<FilesMatch "\.js\.gz$">
+  <IfModule mod_deflate.c>
+    SetEnv no-gzip 1
+  </IfModule>
+</FilesMatch>
+
+# Cache-Control for seo-deferred.css (non-blocking deferred stylesheet)
+<FilesMatch "^seo-deferred\.css$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "public, max-age=604800"
+  </IfModule>
+</FilesMatch>
